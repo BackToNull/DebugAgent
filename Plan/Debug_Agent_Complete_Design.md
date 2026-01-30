@@ -9,32 +9,42 @@
 │                           Debug Agent 系统架构                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  ┌─────────────┐     ┌──────────────────────────────────────────────────┐  │
-│  │   输入层    │     │                    知识库层                       │  │
-│  │             │     │  ┌────────────┐ ┌────────────┐ ┌────────────┐   │  │
-│  │ • 告警系统  │     │  │ 代码索引库 │ │ 历史Case库 │ │ 日志模式库 │   │  │
-│  │ • 工单系统  │     │  └────────────┘ └────────────┘ └────────────┘   │  │
-│  │ • Slack/飞书│     │  ┌────────────┐ ┌────────────┐ ┌────────────┐   │  │
-│  │ • API调用   │     │  │ 配置文档库 │ │ API定义库  │ │ 错误码映射 │   │  │
-│  └──────┬──────┘     │  └────────────┘ └────────────┘ └────────────┘   │  │
-│         │            └──────────────────────────────────────────────────┘  │
-│         ▼                                    ▲                             │
+│  ┌───────────────┐   ┌──────────────────────────────────────────────────┐  │
+│  │    输入层      │   │                    知识库层                         │
+│  │               │   │  ┌────────────┐ ┌────────────┐ ┌────────────┐   │  │
+│  │ •模型服务调用   │   │  │ 代码索引库 │ │ 历史Case库 │ │ 日志模式库 │   │  │
+│  │   工单         │   │  └────────────┘ └────────────┘ └────────────┘   │  │
+│  │               │   │  ┌────────────┐ ┌────────────┐ ┌────────────┐   │  │
+│  │               │   │  │ 配置文档库   │ │ API定义库  │ │    错误码映射 │    │  │
+│  └───────┬───────┘   │  └────────────┘ └────────────┘ └────────────┘   │  │
+│          │           └──────────────────────────────────────────────────┘  │
+│          ▼                                   ▲                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                         核心处理层                                   │   │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐           │   │
-│  │  │ 预处理器 │→ │ 分类引擎 │→ │ 检索引擎 │→ │ 推理引擎 │           │   │
+│  │  │ 预处理器   │→ │ 分类引擎 │→ │ 检索引擎 │→ │ 推理引擎 │           │   │
 │  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘           │   │
 │  │       ↓              ↓             ↓             ↓                 │   │
 │  │  信息提取      类型判断      多路召回      根因分析                 │   │
 │  │  结构化解析    优先级评估    上下文聚合    修复建议                 │   │
+│  │                                                                     │   │
+│  │  ┌──────────────────────────────────────────────────────────────┐  │   │
+│  │  │                    MCP 能力层                                 │  │   │
+│  │  │  ┌────────────────┐  ┌────────────────┐  ┌───────────────┐   │  │   │
+│  │  │  │ Langfuse MCP   │  │ get_trace()    │  │ search_traces │   │  │   │
+│  │  │  │ Server         │  │ get_session()  │  │ get_spans()   │   │  │   │
+│  │  │  └────────────────┘  └────────────────┘  └───────────────┘   │  │   │
+│  │  │  • 实时获取 Langfuse 日志数据                                 │  │   │
+│  │  │  • LLM 推理时动态调用 MCP 工具                                │  │   │
+│  │  └──────────────────────────────────────────────────────────────┘  │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │         │                                                                   │
 │         ▼                                                                   │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         输出与反馈层                                 │   │
-│  │  • 结构化报告（问题定位 + 根因 + 修复建议 + 置信度）                │   │
-│  │  • 自动创建修复 PR（可选）                                          │   │
-│  │  • 反馈闭环（修复验证 → 知识库更新）                                │   │
+│  │                         输出与反馈层                                  │   │
+│  │  • 结构化报告（问题定位 + 根因 + 修复建议 + 置信度）                       │   │
+│  │  • 自动创建修复 PR（可选）                                              │   │
+│  │  • 反馈闭环（修复验证 → 知识库更新）                                      │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -49,7 +59,7 @@
 ```json
 {
   "bug_id": "string",
-  "source": "alert|ticket|manual|api",
+  "source": "model_service_ticket",
   "timestamp": "ISO8601",
   "severity": "P0|P1|P2|P3",
   "environment": {
@@ -76,14 +86,11 @@
 }
 ```
 
-**多来源适配器：**
+**模型服务调用工单适配器：**
 
 | 来源 | 适配逻辑 |
 |------|----------|
-| 告警系统(如Prometheus Alert) | 解析告警标签，提取 trace_id，自动拉取关联日志 |
-| 工单系统(如Jira) | 提取描述、附件中的日志截图（OCR）、关联的 commit |
-| IM 消息(Slack/飞书) | NLP 解析自然语言描述，提取关键错误信息 |
-| API 直接调用 | 严格校验 schema，支持批量提交 |
+| 模型服务调用工单 | 解析工单内容，提取 trace_id/request_id，通过 MCP 调用 Langfuse 获取关联日志和调用链路 |
 
 ### 2.2 预处理模块
 
@@ -165,16 +172,90 @@ def classify_bug(bug_info):
     return llm_classify(bug_info)
 ```
 
-### 2.4 多路检索模块
+### 2.4 MCP 能力层（Langfuse 日志接入）
+
+**MCP 架构设计：**
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                    Debug Agent (MCP Client)                     │
+│                                                                 │
+│  ┌─────────────┐    ┌─────────────────────────────────────┐   │
+│  │  推理引擎   │───▶│        MCP Tool Calling              │   │
+│  │  (LLM)      │◀───│  根据分析需要动态调用 MCP 工具       │   │
+│  └─────────────┘    └─────────────────────────────────────┘   │
+│                                   │                             │
+└───────────────────────────────────│─────────────────────────────┘
+                                    │ MCP Protocol
+                                    ▼
+┌────────────────────────────────────────────────────────────────┐
+│                    Langfuse MCP Server                          │
+│                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐     │
+│  │ get_trace()  │  │search_traces │  │ get_session()    │     │
+│  │ 获取单个trace│  │ 搜索traces   │  │ 获取会话traces   │     │
+│  └──────────────┘  └──────────────┘  └──────────────────┘     │
+│                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐     │
+│  │ get_spans()  │  │get_generations│ │ get_observations │     │
+│  │ 获取span详情 │  │ 获取LLM调用  │  │ 获取观测数据     │     │
+│  └──────────────┘  └──────────────┘  └──────────────────┘     │
+│                                   │                             │
+└───────────────────────────────────│─────────────────────────────┘
+                                    │ REST API
+                                    ▼
+                          ┌─────────────────┐
+                          │    Langfuse     │
+                          │    云端/自托管   │
+                          └─────────────────┘
+```
+
+**MCP 工具定义：**
+
+| 工具名称 | 参数 | 描述 |
+|----------|------|------|
+| `get_trace` | trace_id: string | 根据 trace_id 获取完整调用链路 |
+| `search_traces` | query: string, time_range: object, limit: int | 搜索符合条件的 traces |
+| `get_session_traces` | session_id: string | 获取某个会话的所有 traces |
+| `get_spans` | trace_id: string | 获取 trace 下的所有 span 详情 |
+| `get_generations` | trace_id: string | 获取 LLM 调用记录（输入/输出/token 用量） |
+| `get_observations` | trace_id: string, type: string | 获取指定类型的观测数据 |
+
+**典型调用场景：**
+
+```python
+# 场景1: 从工单 trace_id 获取完整调用链
+trace = await mcp_client.call_tool("get_trace", {"trace_id": bug_input.trace_id})
+
+# 场景2: 搜索相似错误
+similar = await mcp_client.call_tool("search_traces", {
+    "query": "error:timeout service:copilot-server",
+    "time_range": {"from": "2024-01-01", "to": "2024-01-30"},
+    "limit": 10
+})
+
+# 场景3: LLM 推理过程中动态调用（Agentic 模式）
+# LLM 分析时可自主决定是否需要更多日志数据
+```
+
+**MCP Server 实现要点：**
+
+1. **认证管理**：封装 Langfuse API Key，客户端无需感知
+2. **数据脱敏**：可在 Server 层对敏感信息进行过滤
+3. **缓存策略**：高频查询结果缓存，减少 API 调用
+4. **错误处理**：优雅降级，Langfuse 不可用时返回空结果
+
+### 2.5 多路检索模块
 
 **检索策略矩阵：**
 
 | 检索类型 | 数据源 | 检索方式 | 召回数量 | 权重 |
 |----------|--------|----------|----------|------|
-| 历史相似Case | Case知识库 | 向量相似度 | Top 5 | 0.4 |
-| 相关代码 | 代码索引 | 混合检索(语义+关键字) | Top 10 | 0.3 |
-| 错误模式匹配 | 日志模式库 | 精确+模糊匹配 | Top 3 | 0.2 |
+| 历史相似Case | Case知识库 | 向量相似度 | Top 5 | 0.35 |
+| 相关代码 | 代码索引 | 混合检索(语义+关键字) | Top 10 | 0.25 |
+| 错误模式匹配 | 日志模式库 | 精确+模糊匹配 | Top 3 | 0.15 |
 | 配置关联 | 配置文档库 | 关键字匹配 | Top 3 | 0.1 |
+| Langfuse 日志 | MCP 实时获取 | trace_id 精确查询 | 按需 | 0.15 |
 
 **代码检索增强策略：**
 
@@ -185,13 +266,20 @@ def classify_bug(bug_info):
 4. 最近变更 → git blame 定位最近修改者
 ```
 
-### 2.5 LLM 推理模块
+### 2.6 LLM 推理模块（支持 MCP 工具调用）
 
-**Prompt 工程设计（Chain of Thought）：**
+**Prompt 工程设计（Chain of Thought + Tool Use）：**
 
 ```markdown
 ## 系统角色
 你是一个专业的后端服务 Debug 专家，负责分析 copilot-server 的问题。
+你可以使用以下工具获取更多信息：
+
+### 可用工具
+- get_trace(trace_id): 获取完整调用链路
+- search_traces(query, time_range): 搜索相似错误
+- get_generations(trace_id): 获取 LLM 调用详情
+- get_spans(trace_id): 获取 span 级别详情
 
 ## 分析任务
 基于以下信息，按步骤分析问题：
@@ -386,11 +474,13 @@ patterns:
 | 关系型存储 | PostgreSQL | MySQL |
 | 缓存 | Redis | - |
 | 消息队列 | Kafka / RabbitMQ | Redis Streams |
-| LLM | GPT-4 / Claude | 自部署开源模型 |
+| LLM | GPT-4 / Claude | 智谱 AI / 自部署开源模型 |
 | 代码解析 | Tree-sitter | - |
 | Embedding | text-embedding-3-large | BGE / CodeBERT |
 | 任务调度 | Celery | Temporal |
 | 可观测性 | Prometheus + Grafana + Jaeger | - |
+| MCP Server | Python mcp-sdk | TypeScript @modelcontextprotocol/sdk |
+| 日志平台 | Langfuse | - |
 
 ### 4.2 项目结构
 
@@ -419,6 +509,16 @@ debug-agent/
 │   │   │   └── chain.py
 │   │   └── reporter/           # 报告生成
 │   │
+│   ├── mcp/                    # MCP 能力层
+│   │   ├── server/             # Langfuse MCP Server
+│   │   │   ├── langfuse_server.py
+│   │   │   └── tools/
+│   │   │       ├── get_trace.py
+│   │   │       ├── search_traces.py
+│   │   │       └── get_generations.py
+│   │   └── client/             # MCP Client 封装
+│   │       └── mcp_client.py
+│   │
 │   ├── knowledge/              # 知识库管理
 │   │   ├── indexer/            # 索引构建
 │   │   │   ├── code_indexer.py
@@ -427,10 +527,8 @@ debug-agent/
 │   │   └── sync/               # 数据同步
 │   │
 │   ├── integrations/           # 外部集成
-│   │   ├── alert_webhook.py    # 告警系统对接
-│   │   ├── im_bot.py           # IM 机器人
-│   │   ├── git_service.py      # Git 操作
-│   │   └── log_service.py      # 日志服务对接
+│   │   ├── ticket_parser.py    # 模型服务调用工单解析
+│   │   └── git_service.py      # Git 操作
 │   │
 │   ├── storage/                # 存储层
 │   │   ├── vector_store.py
@@ -461,7 +559,15 @@ async def process_bug(bug_input: BugInput) -> AnalysisResult:
     # 2. 分类
     bug_category = await classifier.classify(structured_bug)
     
-    # 3. 多路检索（并行）
+    # 3. 通过 MCP 获取 Langfuse 日志数据
+    langfuse_data = None
+    if structured_bug.trace_id:
+        langfuse_data = await mcp_client.call_tool(
+            "get_trace", 
+            {"trace_id": structured_bug.trace_id}
+        )
+    
+    # 4. 多路检索（并行）
     retrieval_tasks = [
         case_retriever.search(structured_bug),
         code_retriever.search(structured_bug),
@@ -469,22 +575,27 @@ async def process_bug(bug_input: BugInput) -> AnalysisResult:
     ]
     similar_cases, related_code, matched_patterns = await asyncio.gather(*retrieval_tasks)
     
-    # 4. 构建上下文
+    # 5. 构建上下文（包含 Langfuse 数据）
     context = build_analysis_context(
         bug=structured_bug,
         category=bug_category,
         cases=similar_cases,
         code=related_code,
-        patterns=matched_patterns
+        patterns=matched_patterns,
+        langfuse_trace=langfuse_data  # 新增：Langfuse 调用链数据
     )
     
-    # 5. LLM 推理分析
-    analysis_result = await llm_analyzer.analyze(context)
+    # 6. LLM 推理分析（支持 Agentic MCP 工具调用）
+    # LLM 可在分析过程中自主调用 MCP 工具获取更多日志信息
+    analysis_result = await llm_analyzer.analyze(
+        context,
+        tools=mcp_client.get_available_tools()  # 注入 MCP 工具
+    )
     
-    # 6. 后处理 & 结果校验
+    # 7. 后处理 & 结果校验
     validated_result = await result_validator.validate(analysis_result)
     
-    # 7. 异步：记录本次分析（用于后续反馈）
+    # 8. 异步：记录本次分析（用于后续反馈）
     await analysis_recorder.record(bug_input, validated_result)
     
     return validated_result
@@ -511,20 +622,20 @@ async def process_bug(bug_input: BugInput) -> AnalysisResult:
 
 ### Phase 2: 增强（4-6 周）
 
-**目标：** 提升准确率，增加实用功能
+**目标：** 提升准确率，增加 MCP 能力
 
 | 任务 | 工作量 | 产出 |
 |------|--------|------|
 | 日志模式库 | 1 周 | 常见错误快速识别 |
-| 告警系统对接 | 1 周 | 自动接收告警 |
+| Langfuse MCP Server | 1.5 周 | 实时获取 Langfuse 日志数据 |
 | 检索优化（混合检索） | 1.5 周 | 更精准的召回 |
 | 反馈闭环 | 1 周 | 修复结果回写 |
-| Prompt 优化 | 1 周 | 更准确的分析 |
+| Prompt 优化（含工具调用） | 1 周 | 支持 Agentic 工具调用 |
 
 **验收标准：**
 - 分析准确率 > 75%
 - 平均分析时间 < 30 秒
-- 支持告警自动触发分析
+- LLM 可自主调用 MCP 工具获取 Langfuse 数据
 
 ### Phase 3: 自动化（6-8 周）
 
