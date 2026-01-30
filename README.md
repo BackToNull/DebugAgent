@@ -140,15 +140,6 @@ debug-agent/
 ├── Dockerfile
 └── docker-compose.yml
 ```
-
-## 下一步计划
-
-- [ ] 接入代码仓索引（支持 Git 仓库扫描）
-- [ ] 接入告警系统（Prometheus AlertManager / PagerDuty）
-- [ ] 添加反馈闭环机制
-- [ ] 支持自动生成修复 PR
-- [ ] 添加 Slack/飞书机器人
-
 ## 配置说明
 
 | 环境变量 | 说明 | 默认值 |
